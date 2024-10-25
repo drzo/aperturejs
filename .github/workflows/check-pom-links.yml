@@ -4,7 +4,7 @@ name: Check and Fix POM Broken Links
 on:
   push:
     branches:
-      - main  # Adjust to your default branch
+      - develop  # Adjust to your default branch
   schedule:
     - cron: '0 2 * * *'  # Runs daily at 2 AM UTC
 
