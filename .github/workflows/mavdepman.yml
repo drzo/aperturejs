@@ -1,0 +1,168 @@
+name: Maven Build and Dependency Management
+
+on:
+  push:
+    branches: [ develop ]
+  pull_request:
+    branches: [ develop ]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *'  # Runs daily at 3 AM UTC
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build and Resolve Dependencies
+
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # Step 2: Set up JDK 11
+      - name: Set Up JDK 11
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+          cache: maven
+
+      # Step 3: Display Java and Maven Versions
+      - name: Display Java Version
+        run: java -version
+
+      - name: Display Maven Version
+        run: mvn -version
+
+      # Step 4: Create a Custom Maven Settings File (if needed)
+      # This step is optional and only needed if you have additional repository configurations.
+      - name: Set Up Maven Settings
+        run: |
+          mkdir -p ~/.m2
+          echo "<settings xmlns=\"http://maven.apache.org/SETTINGS/1.0.0\"
+                 xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"
+                 xsi:schemaLocation=\"http://maven.apache.org/SETTINGS/1.0.0
+                                     https://maven.apache.org/xsd/settings-1.0.0.xsd\">
+                    <mirrors>
+                      <mirror>
+                        <id>central-https</id>
+                        <mirrorOf>central</mirrorOf>
+                        <url>https://repo.maven.apache.org/maven2/</url>
+                      </mirror>
+                      <!-- Add other mirrors if necessary -->
+                    </mirrors>
+                    <profiles>
+                      <profile>
+                        <id>default-profile</id>
+                        <repositories>
+                          <repository>
+                            <id>eclipselink</id>
+                            <name>EclipseLink Repository</name>
+                            <url>https://download.eclipse.org/rt/eclipselink/maven.repo</url>
+                            <releases>
+                              <enabled>true</enabled>
+                            </releases>
+                            <snapshots>
+                              <enabled>false</enabled>
+                            </snapshots>
+                          </repository>
+                          <repository>
+                            <id>maven-restlet</id>
+                            <name>Restlet Maven Repository</name>
+                            <url>https://maven.restlet.org</url>
+                            <releases>
+                              <enabled>true</enabled>
+                            </releases>
+                            <snapshots>
+                              <enabled>false</enabled>
+                            </snapshots>
+                          </repository>
+                          <!-- Add other repositories as needed -->
+                        </repositories>
+                      </profile>
+                    </profiles>
+                    <activeProfiles>
+                      <activeProfile>default-profile</activeProfile>
+                    </activeProfiles>
+                  </settings>" > ~/.m2/settings.xml
+
+      # Step 5: Upgrade Maven Plugins (if not already in POM)
+      # Since you've already updated the `dependency-maven-plugin` in your POM, this step may be redundant.
+      # If you need to enforce plugin versions, consider using the Maven Enforcer Plugin or define pluginManagement.
+
+      # Step 6: Install Missing Dependency Manually (if necessary)
+      - name: Install Missing Dependency (aperture-spi)
+        if: failure() # Only run if previous steps failed due to dependency issues
+        run: |
+          # Define variables
+          DEP_GROUP_ID=oculus.aperture
+          DEP_ARTIFACT_ID=aperture-spi
+          DEP_VERSION=1.0.9.1
+          DEP_PACKAGING=jar
+          DEP_FILE=aperture-spi-1.0.9.1.jar
+          DEP_POM=aperture-spi-1.0.9.1.pom
+
+          # Download the JAR and POM files
+          # Replace the URLs with the actual locations where these files are hosted
+          # If they're not hosted anywhere, you'll need to include them in your repository or use GitHub Packages
+          wget -O $DEP_FILE https://path.to/your/artifacts/$DEP_FILE
+          wget -O $DEP_POM https://path.to/your/artifacts/$DEP_POM
+
+          # Install the artifact into the local Maven repository
+          mvn install:install-file \
+            -DgroupId=$DEP_GROUP_ID \
+            -DartifactId=$DEP_ARTIFACT_ID \
+            -Dversion=$DEP_VERSION \
+            -Dpackaging=$DEP_PACKAGING \
+            -Dfile=$DEP_FILE \
+            -DpomFile=$DEP_POM
+
+      # Step 7: Clean and Install Maven Dependencies
+      - name: Maven Clean and Install
+        run: mvn clean install -U
+
+      # Step 8: Generate Dependency Tree
+      - name: Generate Dependency Tree
+        run: mvn dependency:tree -Dverbose -DoutputType=dot -DoutputFile=dependency-tree.dot
+
+      # Step 9: Upload Dependency Tree Artifact
+      - name: Upload Dependency Tree
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependency-tree
+          path: dependency-tree.dot
+
+      # Step 10: Analyze Dependencies
+      - name: Analyze Dependencies
+        run: mvn dependency:analyze -Doutput=dependency-analysis.txt
+
+      # Step 11: Upload Dependency Analysis Report
+      - name: Upload Dependency Analysis
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependency-analysis
+          path: dependency-analysis.txt
+
+      # Step 12: Notify on Dependency Analysis Issues
+      - name: Notify Dependency Issues
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.example.com
+          server_port: 587
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: 'Maven Dependency Issues Detected'
+          body: |
+            The Maven dependency analysis has detected issues. Please review the dependency-analysis.txt report.
+          to: your-email@example.com
+          from: github-actions@example.com
+
+      # Step 13: Create GitHub Issue for Dependency Issues
+      - name: Create GitHub Issue for Dependency Issues
+        if: failure()
+        uses: peter-evans/create-issue-from-file@v3
+        with:
+          title: 'Maven Dependency Issues Detected'
+          content-file: dependency-analysis.txt
+          labels: dependency, issue
